@@ -1,0 +1,10 @@
+/bin/
+
+aggregation.js
+input-olap.csv
+input-reviews.csv
+log.txt
+output-params.csv
+settings-olap.properties
+output-sequences.csv
+settings.properties
