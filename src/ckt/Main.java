@@ -58,43 +58,44 @@ public class Main
 		double[] scores = new double[metrics.size()];
 		double[] aggregated = new double[Sequence.DRAWS];
 		for (Sequence sequence : allSequences)
-		{
-			for (int d = 0; d < Sequence.DRAWS; ++d)
+			for (Problem problem : sequence.problems)
 			{
-				if (file == null)
+				for (int d = 0; d < Sequence.DRAWS; ++d)
 				{
-					aggregated[d] = aggregationBase;
-					// if (allSequences.indexOf(sequence) <= 10 && d == 0) log();
-					for (Metric metric : metrics)
+					if (file == null)
 					{
-						/* if (allSequences.indexOf(sequence) <= 10 && d == 0) log(metric.name + ": " + metric.weight + " * " + metric.initialDistribution.unreduce(sequence.finalProblem().metricKnowledge.get(metric).next())); */
-						aggregated[d] += metric.weight * metric.initialDistribution.unreduce(sequence.finalProblem().metricKnowledge.get(metric).next());
+						aggregated[d] = aggregationBase;
+						// if (allSequences.indexOf(sequence) <= 10 && d == 0) log();
+						for (Metric metric : metrics)
+						{
+							/* if (allSequences.indexOf(sequence) <= 10 && d == 0) log(metric.name + ": " + metric.weight + " * " + metric.initialDistribution.unreduce(sequence.finalProblem().metricKnowledge.get(metric).next())); */
+							aggregated[d] += metric.weight * metric.initialDistribution.unreduce(problem.metricKnowledge.get(metric).next());
+						}
+					} else try
+					{
+						for (int m = 0; m < metrics.size(); ++m)
+							scores[m] = metrics.get(m).initialDistribution.unreduce(problem.metricKnowledge.get(metrics.get(m)).next());
+
+						// Input: double[] containing scores for each metric for a single problem.
+						// Output: aggregated score as a double.
+						script.put("metrics", scores);
+						script.eval(new BufferedReader(new FileReader(file)));
+						aggregated[d] = (double) script.get("aggregated");
+					} catch (FileNotFoundException e)
+					{
+						log("Couldn't find aggregation script: " + settings.getProperty("aggregation_script"));
+						return false;
+					} catch (Exception e)
+					{
+						log("Error while aggregating metrics:\n" + e.getMessage());
+						return false;
 					}
-				} else try
-				{
-					for (int m = 0; m < metrics.size(); ++m)
-						scores[m] = metrics.get(m).initialDistribution.unreduce(sequence.finalProblem().metricKnowledge.get(metrics.get(m)).next());
-
-					// Input: double[] containing scores for each metric for a single problem.
-					// Output: aggregated score as a double.
-					script.put("metrics", scores);
-					script.eval(new BufferedReader(new FileReader(file)));
-					aggregated[d] = (double) script.get("aggregated");
-				} catch (FileNotFoundException e)
-				{
-					log("Couldn't find aggregation script: " + settings.getProperty("aggregation_script"));
-					return false;
-				} catch (Exception e)
-				{
-					log("Error while aggregating metrics:\n" + e.getMessage());
-					return false;
+					if (aggregated[d] >= 1) aggregated[d] = 1;
 				}
-				if (aggregated[d] >= 1) aggregated[d] = 1;
-			}
-			sequence.finalProblem().aggregatedKnowledge = Utils.makeGaussian(aggregated);
-			if (sequence.finalProblem().aggregatedKnowledge.mean > 1) ++invalid;
+				problem.aggregatedKnowledge = Utils.makeGaussian(aggregated);
+				if (problem.aggregatedKnowledge.mean > 1) ++invalid;
 
-		}
+			}
 		if (invalid != 0) log("Found " + invalid + " invalid knowledge values!");
 
 		return true;
@@ -104,14 +105,7 @@ public class Main
 	{
 		if (metric == null) log("Executing Knowledge Tracing...");
 		else log("Executing Knowledge Tracing on metric \"" + metric.name + "\"...");
-		if (metric != null)
-		{
-			ArrayList<Double> values = new ArrayList<Double>();
-			for (Sequence sequence : allSequences)
-				for (Problem problem : sequence.problems)
-					values.add(problem.metricScores.get(metric));
-			applyThreshold(Utils.makeGaussian(values.toArray(new Double[values.size()])).mean, metric);
-		}
+		if (metric != null) applyThreshold(metric);
 		findKnowledgeSequences();
 
 		KTParameters[] params = new KTParameters[validations + 2];
@@ -132,18 +126,21 @@ public class Main
 		computeStats(params);
 	}
 
-	/** Uses the input <code>threshold</code> to determine the correctness of the problems. */
+	/** Uses the input <code>threshold</code> to determine the correctness of the problem. */
 	private static void applyThreshold(double threshold)
-	{
-		applyThreshold(threshold, null);
-	}
-
-	/** Uses the input <code>threshold</code> to determine the correctness of the problem for the input metric. If null, then uses the general score. */
-	private static void applyThreshold(double threshold, Metric metric)
 	{
 		for (Sequence sequence : allSequences)
 			for (Problem problem : sequence.problems)
-				problem.isCorrect = (metric == null && problem.score >= threshold) || (metric != null && problem.metricScores.get(metric) >= threshold);
+				problem.isCorrect = problem.score >= threshold;
+	}
+
+	/** Uses the metric's <code>threshold</code> to determine the correctness of the problem. */
+	private static void applyThreshold(Metric metric)
+	{
+		for (Sequence sequence : allSequences)
+			for (Problem problem : sequence.problems)
+				problem.isCorrect = (!metric.thresholdReversed && problem.metricScores.get(metric) >= metric.threshold)
+						|| (metric.thresholdReversed && problem.metricScores.get(metric) < metric.threshold);
 	}
 
 	/** 1) Removes empty sequences.<br />
@@ -196,6 +193,7 @@ public class Main
 					for (Problem problem : sequence.problems)
 						problem.metricScores.put(metric, (problem.metricScores.get(metric) - min) / (max - min));
 
+				metric.threshold = (metric.threshold - min) / (max - min);
 				metric.initialDistribution = new Gaussian(min, max - min);
 			}
 		}
@@ -283,6 +281,54 @@ public class Main
 		return Math.sqrt(rmse / count);
 	}
 
+	/** Uses the metrics to calculate the score of each problem.
+	 * 
+	 * @return True if it succeeded. */
+	private static boolean computeScores()
+	{
+		log("Calculating scores...");
+		ScriptEngine script = new ScriptEngineManager().getEngineByName("nashorn");
+		File file = null;
+		if (settings.getProperty("aggregation_type").equals("script")) file = new File(settings.getProperty("aggregation_value"));
+
+		double[] scores = new double[metrics.size()];
+		for (Sequence sequence : allSequences)
+		{
+			for (Problem problem : sequence.problems)
+			{
+				if (file == null)
+				{
+					problem.score = aggregationBase;
+					// if (allSequences.indexOf(sequence) <= 10 && d == 0) log();
+					for (Metric metric : metrics)
+						problem.score += metric.weight * problem.metricScores.get(metric);
+
+				} else try
+				{
+					for (int m = 0; m < metrics.size(); ++m)
+						scores[m] = problem.metricScores.get(metrics.get(m));
+
+					// Input: double[] containing scores for each metric for a single problem.
+					// Output: aggregated score as a double.
+					script.put("metrics", scores);
+					script.eval(new BufferedReader(new FileReader(file)));
+					problem.score = (double) script.get("aggregated");
+				} catch (FileNotFoundException e)
+				{
+					log("Couldn't find aggregation script: " + settings.getProperty("aggregation_script"));
+					return false;
+				} catch (Exception e)
+				{
+					log("Error while aggregating metrics:\n" + e.getMessage());
+					return false;
+				}
+			}
+
+		}
+
+		return true;
+	}
+
 	/** Computes statistics for the parameters. */
 	private static void computeStats(KTParameters[] parametersArray)
 	{
@@ -318,11 +364,82 @@ public class Main
 		parametersArray[validations + 1] = new KTParameters(sStart, sTransition, null, null);
 	}
 
+	/** @return The variation for the final Knowledge for the input sequences.
+	 * @param aggregated - If true, will compute the variation for the aggregated Knowledge. */
+	private static double computeVariation(ArrayList<Sequence> sequences, boolean aggregated)
+	{
+		double variation = 0;
+		int count = 0;
+		for (Sequence sequence : sequences)
+			if (!aggregated || (sequence.finalProblem().aggregatedKnowledge.mean <= 1 && sequence.finalProblem().aggregatedKnowledge.mean >= 0))
+			{
+				++count;
+				variation += (aggregated ? sequence.finalProblem().aggregatedKnowledge : sequence.finalProblem().knowledge).variation;
+			}
+
+		return variation / count;
+	}
+
+	private static boolean createMetrics(String inputMetrics, String inputWeight, String inputThreshold)
+	{
+		metrics = new ArrayList<Metric>();
+		try
+		{
+			inputMetrics = inputMetrics.substring(1, inputMetrics.length() - 1).replaceAll(" ", "");
+			if (inputMetrics.equals("")) return true;
+			String[] m = inputMetrics.split(",");
+			for (String metric : m)
+				metrics.add(new Metric(metric));
+
+			if (inputWeight != null)
+			{
+				inputWeight = inputWeight.substring(1, inputWeight.length() - 1).replaceAll(" ", "");
+				if (inputWeight.equals("")) return true;
+				String[] w = inputWeight.split(",");
+				for (int i = 0; i < w.length - 1; ++i)
+					metrics.get(i).weight = Utils.parseDouble(w[i]);
+				aggregationBase = Utils.parseDouble(w[w.length - 1]);
+			}
+
+			if (inputThreshold != null)
+			{
+				if (!inputThreshold.startsWith("["))
+				{
+					double t = Double.parseDouble(inputThreshold);
+					for (Metric metric : metrics)
+					{
+						metric.threshold = t;
+						metric.thresholdReversed = metric.weight < 0;
+					}
+				} else
+				{
+					inputThreshold = inputThreshold.substring(1, inputThreshold.length() - 1).replaceAll(" ", "");
+					if (inputThreshold.equals("")) return true;
+					String[] t = inputThreshold.split(",");
+					for (int i = 0; i < t.length; ++i)
+					{
+						if (t[i].startsWith("<")) metrics.get(i).thresholdReversed = true;
+						if (t[i].startsWith("<") || t[i].startsWith(">")) t[i] = t[i].substring(1);
+						metrics.get(i).threshold = Utils.parseDouble(t[i]);
+					}
+				}
+			}
+
+			return true;
+		} catch (Exception e)
+		{
+			log("Error while reading metrics: " + e.getMessage());
+			e.printStackTrace();
+			return false;
+		}
+	}
+
 	/** Reads the input files and creates the corresponding Sequences.
 	 * 
 	 * @param set - The set to store the Sequences in.
-	 * @param input - The input file with the data. */
-	private static void createSequences(ArrayList<Sequence> set, File input)
+	 * @param input - The input file with the data.
+	 * @return true if it succeeded. */
+	private static boolean createSequences(ArrayList<Sequence> set, File input)
 	{
 		set.clear();
 		log("Reading input file: " + input.getName());
@@ -331,33 +448,42 @@ public class Main
 		HashMap<Metric, Integer> metricIndex = new HashMap<Metric, Integer>();
 		try
 		{
-			CSVParser parser = CSVParser.parse(input, Charset.defaultCharset(), CSVFormat.EXCEL);
+			CSVParser parser = CSVParser.parse(input, Charset.defaultCharset(), CSVFormat.DEFAULT);
 
 			for (CSVRecord record : parser)
-				if (parser.getCurrentLineNumber() == 1) for (int i = 0; i < record.size(); ++i)
+				if (parser.getCurrentLineNumber() == 1)
 				{
-					if (record.get(i).equals("sequence")) sequenceID = i;
-					else if (record.get(i).equals("problem")) problemID = i;
-					else if (record.get(i).equals("expected_knowledge")) expectedKnowledge = i;
-					else if (record.get(i).equals("order")) order = i;
-					else if (record.get(i).equals("correctness")) correctness = i;
-					else if (record.get(i).equals("score")) score = i;
+					for (int i = 0; i < record.size(); ++i)
+					{
+						if (record.get(i).equals("sequence")) sequenceID = i;
+						else if (record.get(i).equals("problem")) problemID = i;
+						else if (record.get(i).equals("expected_knowledge")) expectedKnowledge = i;
+						else if (record.get(i).equals("order")) order = i;
+						else if (record.get(i).equals("correctness")) correctness = i;
+						else if (record.get(i).equals("score")) score = i;
+						for (Metric metric : metrics)
+							if (record.get(i).equals(metric.name)) metricIndex.put(metric, i);
+					}
 					for (Metric metric : metrics)
-						if (record.get(i).equals(metric.name)) metricIndex.put(metric, i);
-				}
-				else try
+						if (!metricIndex.containsKey(metric))
+						{
+							System.out.println("Metric couldn't be found in input file: " + metric.name);
+							return false;
+						}
+				} else try
 				{
 					Sequence sequence = findSequence(set, record.get(sequenceID));
 					Problem p = order == -1 ? new Problem(record.get(problemID)) : new Problem(record.get(problemID), Integer.parseInt(record.get(order)));
 					p.expectedKnowledge = Utils.parseDouble(record.get(expectedKnowledge));
-					p.isCorrect = record.get(correctness).equals("1");
-					p.score = Utils.parseDouble(record.get(score));
+					p.isCorrect = correctness == -1 ? false : record.get(correctness).equals("1");
+					p.score = score == -1 ? 0 : Utils.parseDouble(record.get(score));
 					for (Metric metric : metrics)
-						p.metricScores.put(metric, Double.parseDouble(record.get(metricIndex.get(metric))));
+						p.metricScores.put(metric, Utils.parseDouble(record.get(metricIndex.get(metric))));
 					sequence.problems.add(p);
 				} catch (NumberFormatException e)
 				{
 					log("Error reading problem " + record.get(1) + ": " + e.getMessage());
+					e.printStackTrace();
 				}
 		} catch (IOException e)
 		{
@@ -366,6 +492,8 @@ public class Main
 
 		for (Sequence sequence : set)
 			sequence.problems.sort(Comparator.naturalOrder());
+
+		return true;
 	}
 
 	/** Exports the Sequences and calculated Knowledge to the output file.
@@ -418,37 +546,9 @@ public class Main
 		return s;
 	}
 
-	private static boolean loadMetrics(String inputMetrics, String inputWeight)
-	{
-		metrics = new ArrayList<Metric>();
-		try
-		{
-			inputMetrics = inputMetrics.substring(1, inputMetrics.length() - 1).replaceAll(" ", "");
-			if (inputMetrics.equals("")) return true;
-			String[] m = inputMetrics.split(",");
-			for (String metric : m)
-				metrics.add(new Metric(metric));
-
-			if (inputWeight != null)
-			{
-				inputWeight = inputWeight.substring(1, inputWeight.length() - 1).replaceAll(" ", "");
-				if (inputWeight.equals("")) return true;
-				String[] w = inputWeight.split(",");
-				for (int i = 0; i < w.length - 1; ++i)
-					metrics.get(i).weight = Utils.parseDouble(w[i]);
-				aggregationBase = Utils.parseDouble(w[w.length - 1]);
-			}
-
-			return true;
-		} catch (Exception e)
-		{
-			log("Error while reading metrics: " + e.getMessage());
-			return false;
-		}
-	}
-
 	public static void log(String text)
 	{
+		System.out.println(text);
 		log.add(text);
 	}
 
@@ -476,8 +576,8 @@ public class Main
 			settings = new Properties();
 			settings.load(new FileInputStream(new File("settings.properties")));
 			for (String property : new String[]
-			{ "aggregation_type", "aggregation_value", "center", "correctness", "cross_validation", "input_file", "metrics", "output_metrics", "output_params",
-					"output_sequences", "split" })
+			{ "aggregation_type", "aggregation_value", "correctness", "cross_validation", "expected_binary", "input_file", "metric_threshold", "metrics",
+					"output_metrics", "output_params", "output_sequences", "scores", "split" })
 
 				if (!settings.containsKey(property))
 				{
@@ -490,8 +590,9 @@ public class Main
 			return;
 		}
 
-		if (!loadMetrics(settings.getProperty("metrics"),
-				settings.getProperty("aggregation_type").equals("weights") ? settings.getProperty("aggregation_value") : null)) return;
+		if (!createMetrics(settings.getProperty("metrics"),
+				settings.getProperty("aggregation_type").equals("weights") ? settings.getProperty("aggregation_value") : null,
+				settings.getProperty("metric_threshold"))) return;
 
 		File sequences = new File(settings.getProperty("input_file"));
 		if (!sequences.exists())
@@ -503,12 +604,14 @@ public class Main
 		allSequences = new ArrayList<Sequence>();
 		testingSet = new ArrayList<Sequence>();
 		learningSet = new ArrayList<Sequence>();
-		createSequences(allSequences, sequences);
-		cleanSequences(Boolean.parseBoolean(settings.getProperty("center")), Boolean.parseBoolean(settings.getProperty("center_metrics")));
+		if (!createSequences(allSequences, sequences)) return;
+		if (settings.getProperty("scores").equals("compute")) computeScores();
+		cleanSequences(settings.getProperty("scores").equals("compute") || settings.getProperty("scores").equals("reduce"),
+				Boolean.parseBoolean(settings.getProperty("center_metrics")));
 
 		if (!settings.getProperty("correctness").equals("true")) try
 		{
-			log("Applying threshold...");
+			log("Applying threshold: " + settings.getProperty("correctness"));
 			applyThreshold(Double.parseDouble(settings.getProperty("correctness")));
 		} catch (Exception e)
 		{
@@ -578,7 +681,7 @@ public class Main
 	/** @return The data to output. */
 	private static String[][] outputParams()
 	{
-		String[][] output = new String[9][2];
+		String[][] output = new String[11][2];
 		output[0][0] = "param";
 		output[0][1] = "value";
 
@@ -603,8 +706,14 @@ public class Main
 		output[7][0] = "Knowledge RMSE";
 		output[7][1] = Double.toString(computeRMSE(allSequences, false));
 
-		output[8][0] = "Aggregated RMSE";
-		output[8][1] = Double.toString(computeRMSE(allSequences, true));
+		output[8][0] = "Knowledge Variation";
+		output[8][1] = Double.toString(computeVariation(allSequences, false));
+
+		output[9][0] = "Aggregated RMSE";
+		output[9][1] = Double.toString(computeRMSE(allSequences, true));
+
+		output[10][0] = "Aggregated Variation";
+		output[10][1] = Double.toString(computeVariation(allSequences, true));
 
 		return output;
 	}
@@ -612,13 +721,16 @@ public class Main
 	/** @return The Knowledge associated with each problem. */
 	private static String[][] outputProblems()
 	{
-		String[][] data = new String[totalProblems][5];
+		String[][] data = new String[totalProblems][8];
 
 		data[0][0] = "sequence";
 		data[0][1] = "problem";
 		data[0][2] = "computed_knowledge";
 		data[0][3] = "computed_variation";
 		data[0][4] = "distance_to_expected";
+		data[0][5] = "aggregated_knowledge";
+		data[0][6] = "aggregated_variation";
+		data[0][7] = "aggregated_distance_to_expected";
 
 		int current = 0;
 		for (Sequence sequence : allSequences)
@@ -629,6 +741,9 @@ public class Main
 				data[current][2] = Double.toString(problem.knowledge.mean);
 				data[current][3] = Double.toString(problem.knowledge.variation);
 				data[current][4] = Double.toString(Math.abs(problem.expectedKnowledge - problem.knowledge.mean));
+				data[current][5] = Double.toString(problem.aggregatedKnowledge.mean);
+				data[current][6] = Double.toString(problem.aggregatedKnowledge.variation);
+				data[current][7] = Double.toString(Math.abs(problem.expectedKnowledge - problem.aggregatedKnowledge.mean));
 				++current;
 			}
 

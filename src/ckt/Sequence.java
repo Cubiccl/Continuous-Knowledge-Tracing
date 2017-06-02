@@ -10,7 +10,7 @@ import ckt.KTParameters.Gaussian;
 public class Sequence implements Comparable<Sequence>
 {
 	/** Number of random values generated to determine P(Ln). */
-	static final int DRAWS = 30;
+	static final int DRAWS = 100;
 
 	/** Best similarity found for Knowledge sequences. */
 	double bestSimilarity;

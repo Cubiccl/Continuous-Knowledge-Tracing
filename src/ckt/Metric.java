@@ -9,10 +9,10 @@ public class Metric implements Comparable<Metric>
 	public Gaussian initialDistribution;
 	/** This Metric's name. */
 	public final String name;
-	/** The parameters found for each step in cross validation, for each skill. <br />
-	 * Each has a size of {@link Main#validations} + 2. First <code>validations</code> values are the parameters. <br />
-	 * Index <code>validations</code> has means for these parameters, <code>validations+1</code> has variations. */
-	public KTParameters[] parameters;
+	/** The threshold to determine if problems are valid for this Metric. */
+	public double threshold;
+	/** True if scores should be lower than the threshold to be valid, instead of higher by default. */
+	public boolean thresholdReversed;
 	/** The weight to aggregate. */
 	public double weight;
 
@@ -20,6 +20,7 @@ public class Metric implements Comparable<Metric>
 	{
 		this.name = name;
 		this.initialDistribution = new Gaussian(0, 1);
+		this.thresholdReversed = false;
 	}
 
 	@Override

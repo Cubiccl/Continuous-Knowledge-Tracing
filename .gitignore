@@ -8,3 +8,7 @@ output-params.csv
 settings-olap.properties
 output-sequences.csv
 settings.properties
+full-dopan-file.csv
+output-params-reviews.csv
+output-params-dopan.csv
+settings.properties-reviews
