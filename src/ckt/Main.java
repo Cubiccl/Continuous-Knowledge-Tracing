@@ -20,8 +20,8 @@ import ckt.KTParameters.Gaussian;
 
 public class Main
 {
-	/** The RMSE for aggregated metrics. */
-	static double aggregatedRMSE;
+	/** The Precision for aggregated metrics. */
+	static double aggregatedPrecision;
 	/** Constant to add to the metrics aggregation. */
 	static double aggregationBase;
 	/** Stores all the Sequences used for cross validation. */
@@ -210,12 +210,17 @@ public class Main
 	private static KTParameters computeParameters()
 	{
 		double kStart = 0, mTransition = 0, mGuess = 0, mSlip = 0;
+		int s = 0;
 
 		// P(L0)
 		int tSize = 0, gSize = 0, sSize = 0;
 		for (Sequence sequence : learningSet)
+		{
 			kStart += sequence.knowledgeSequence.get(0);
-		kStart /= learningSet.size();
+			++s;
+			/* if (sequence.knowledgeSequence.size() > 1) { kStart += sequence.knowledgeSequence.get(1); ++s; } if (sequence.knowledgeSequence.size() > 2) { kStart += sequence.knowledgeSequence.get(2); ++s; } */
+		}
+		kStart /= s;
 
 		// mu(P(T)), mu(P(G)), mu(P(S))
 		for (Sequence sequence : learningSet)
@@ -263,22 +268,33 @@ public class Main
 		return new KTParameters(kStart, mTransition, new Gaussian(mGuess, sGuess), new Gaussian(mSlip, sSlip));
 	}
 
-	/** @return The RMSE for the Knowledge for the input sequences.
-	 * @param aggregated - If true, will compute the RMSE for the aggregated Knowledge. */
-	private static double computeRMSE(ArrayList<Sequence> sequences, boolean aggregated)
+	/** @return The Precision for the Knowledge for the input sequences.
+	 * @param aggregated - If true, will compute the Precision for the aggregated Knowledge. */
+	private static double computePrecision(ArrayList<Sequence> sequences, boolean aggregated)
 	{
-		double rmse = 0;
+		double precision = 0;
 		int count = 0;
 		for (Sequence sequence : sequences)
-			if (!aggregated || (sequence.finalProblem().aggregatedKnowledge.mean <= 1 && sequence.finalProblem().aggregatedKnowledge.mean >= 0))
+		{
+			Problem best = sequence.finalProblem();
+			// Find problem with smallest distance to expected
+			for (Problem p : sequence.problems)
+				if (Math.abs(p.expectedKnowledge - p.knowledge.mean) < Math.abs(best.expectedKnowledge - best.knowledge.mean)) best = p;
+
+			// Use it and all problems after
+			for (int i = sequence.problems.indexOf(best); i < sequence.problems.size(); ++i)
 			{
-				++count;
-				rmse += Math.pow(
-						sequence.finalProblem().expectedKnowledge
-								- (aggregated ? sequence.finalProblem().aggregatedKnowledge : sequence.finalProblem().knowledge).mean, 2);
+				Problem current = sequence.problems.get(i);
+				if (!aggregated || (current.aggregatedKnowledge.mean <= 1 && current.aggregatedKnowledge.mean >= 0))
+				{
+					++count;
+					precision += Math.pow(sequence.finalProblem().expectedKnowledge - (aggregated ? current.aggregatedKnowledge : current.knowledge).mean, 2);
+				}
 			}
 
-		return Math.sqrt(rmse / count);
+		}
+
+		return Math.sqrt(precision / count);
 	}
 
 	/** Uses the metrics to calculate the score of each problem.
@@ -577,7 +593,7 @@ public class Main
 			settings.load(new FileInputStream(new File("settings.properties")));
 			for (String property : new String[]
 			{ "aggregation_type", "aggregation_value", "correctness", "cross_validation", "expected_binary", "input_file", "metric_threshold", "metrics",
-					"output_metrics", "output_params", "output_sequences", "scores", "split" })
+					"output_metrics", "output_params", "output_sequences", "output_svm", "scores", "split" })
 
 				if (!settings.containsKey(property))
 				{
@@ -648,6 +664,7 @@ public class Main
 		if (!settings.getProperty("output_params").equals("null")) exportData(new File(settings.getProperty("output_params")), outputParams());
 		if (!settings.getProperty("output_sequences").equals("null")) exportData(new File(settings.getProperty("output_sequences")), outputProblems());
 		if (!settings.getProperty("output_metrics").equals("null")) exportData(new File(settings.getProperty("output_metrics")), outputMetrics());
+		if (!settings.getProperty("output_svm").equals("null")) exportData(new File(settings.getProperty("output_svm")), outputSVM());
 		log("Done!");
 	}
 
@@ -703,14 +720,14 @@ public class Main
 		output[6][0] = "variation(P(S))";
 		output[6][1] = Double.toString(mainParameters[validations].slip.variation);
 
-		output[7][0] = "Knowledge RMSE";
-		output[7][1] = Double.toString(computeRMSE(allSequences, false));
+		output[7][0] = "Knowledge Precision";
+		output[7][1] = Double.toString(computePrecision(allSequences, false));
 
 		output[8][0] = "Knowledge Variation";
 		output[8][1] = Double.toString(computeVariation(allSequences, false));
 
-		output[9][0] = "Aggregated RMSE";
-		output[9][1] = Double.toString(computeRMSE(allSequences, true));
+		output[9][0] = "Aggregated Precision";
+		output[9][1] = Double.toString(computePrecision(allSequences, true));
 
 		output[10][0] = "Aggregated Variation";
 		output[10][1] = Double.toString(computeVariation(allSequences, true));
@@ -746,6 +763,29 @@ public class Main
 				data[current][7] = Double.toString(Math.abs(problem.expectedKnowledge - problem.aggregatedKnowledge.mean));
 				++current;
 			}
+
+		return data;
+	}
+
+	/** @return The file to be processed for SVM. */
+	private static String[][] outputSVM()
+	{
+		String[][] data = new String[allSequences.size()][2 + metrics.size()];
+
+		data[0][0] = "sequence";
+		for (int i = 0; i < metrics.size(); ++i)
+			data[0][i + 1] = metrics.get(i).name;
+		data[0][1 + metrics.size()] = "expected";
+
+		int current = 0;
+		for (Sequence sequence : allSequences)
+		{
+			data[current][0] = sequence.name;
+			for (int i = 0; i < metrics.size(); ++i)
+				data[current][i + 1] = Double.toString(metrics.get(i).initialDistribution.unreduce(sequence.finalProblem().metricScores.get(metrics.get(i))));
+			data[current][1 + metrics.size()] = Double.toString(sequence.finalProblem().expectedKnowledge);
+			++current;
+		}
 
 		return data;
 	}
