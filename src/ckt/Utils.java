@@ -1,5 +1,7 @@
 package ckt;
 
+import java.io.*;
+
 import ckt.KTParameters.Gaussian;
 
 public class Utils
@@ -58,6 +60,26 @@ public class Utils
 		} catch (Exception e)
 		{
 			return Double.parseDouble(input.replaceAll(",", "."));
+		}
+	}
+
+	public static String readTextFile(String path)
+	{
+		File f = new File(path);
+		if (!f.exists()) return null;
+
+		String data = "", line;
+		try
+		{
+			BufferedReader br = new BufferedReader(new FileReader(f));
+			while ((line = br.readLine()) != null)
+				data += line + "\n";
+			br.close();
+			return data;
+		} catch (IOException e)
+		{
+			e.printStackTrace();
+			return null;
 		}
 	}
 

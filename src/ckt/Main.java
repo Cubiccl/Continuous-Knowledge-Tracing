@@ -33,7 +33,7 @@ public class Main
 	static KTParameters[] mainParameters;
 	/** The name of the metrics available. */
 	static ArrayList<Metric> metrics;
-	/** Settings */
+	/** Settings from settings.properties */
 	static Properties settings;
 	/** Stores the Sequences used as testing set. */
 	static ArrayList<Sequence> testingSet;
@@ -50,53 +50,96 @@ public class Main
 	private static boolean aggregateMetrics()
 	{
 		log("Aggregating metrics...");
-		ScriptEngine script = new ScriptEngineManager().getEngineByName("nashorn");
-		File file = null;
-		if (settings.getProperty("aggregation_type").equals("script")) file = new File(settings.getProperty("aggregation_value"));
-
-		int invalid = 0;
-		double[] scores = new double[metrics.size()];
-		double[] aggregated = new double[Sequence.DRAWS];
-		for (Sequence sequence : allSequences)
-			for (Problem problem : sequence.problems)
+		if (settings.getProperty("aggregation_type").equals("svm"))
+		{
+			// Applying SVM script
+			exportData(new File("resultat.csv"), outputSVM());
+			if (!new File(settings.getProperty("aggregation_value")).exists())
 			{
-				for (int d = 0; d < Sequence.DRAWS; ++d)
-				{
-					if (file == null)
-					{
-						aggregated[d] = aggregationBase;
-						// if (allSequences.indexOf(sequence) <= 10 && d == 0) log();
-						for (Metric metric : metrics)
-						{
-							/* if (allSequences.indexOf(sequence) <= 10 && d == 0) log(metric.name + ": " + metric.weight + " * " + metric.initialDistribution.unreduce(sequence.finalProblem().metricKnowledge.get(metric).next())); */
-							aggregated[d] += metric.weight * metric.initialDistribution.unreduce(problem.metricKnowledge.get(metric).next());
-						}
-					} else try
-					{
-						for (int m = 0; m < metrics.size(); ++m)
-							scores[m] = metrics.get(m).initialDistribution.unreduce(problem.metricKnowledge.get(metrics.get(m)).next());
-
-						// Input: double[] containing scores for each metric for a single problem.
-						// Output: aggregated score as a double.
-						script.put("metrics", scores);
-						script.eval(new BufferedReader(new FileReader(file)));
-						aggregated[d] = (double) script.get("aggregated");
-					} catch (FileNotFoundException e)
-					{
-						log("Couldn't find aggregation script: " + settings.getProperty("aggregation_script"));
-						return false;
-					} catch (Exception e)
-					{
-						log("Error while aggregating metrics:\n" + e.getMessage());
-						return false;
-					}
-					if (aggregated[d] >= 1) aggregated[d] = 1;
-				}
-				problem.aggregatedKnowledge = Utils.makeGaussian(aggregated);
-				if (problem.aggregatedKnowledge.mean > 1) ++invalid;
-
+				System.out.println("SVM file not found");
+				return false;
 			}
-		if (invalid != 0) log("Found " + invalid + " invalid knowledge values!");
+			try
+			{
+				Runtime.getRuntime().exec("python " + settings.getProperty("aggregation_value"));
+			} catch (IOException e)
+			{
+				e.printStackTrace();
+				return false;
+			}
+
+			// Gathering SVM data
+			String weightsData = Utils.readTextFile("weights.txt");
+			weightsData = weightsData.replaceAll("\\n", "").replaceAll("\\[", "").replaceAll("\\]", "");
+			while (weightsData.contains("  "))
+				weightsData = weightsData.replaceAll("  ", " ");
+			String[] weights = weightsData.split(" ");
+			for (int i = 1; i < weights.length; ++i)
+				metrics.get(i - 1).weight = Double.parseDouble(weights[i]);
+
+			// Aggregating
+			double[] aggregated = new double[Sequence.DRAWS];
+			for (Sequence sequence : allSequences)
+				for (Problem problem : sequence.problems)
+				{
+					for (int d = 0; d < Sequence.DRAWS; ++d)
+					{
+						aggregated[d] = 0;
+						for (Metric metric : metrics)
+							aggregated[d] += metric.weight * problem.metricKnowledge.get(metric).next();
+					}
+					problem.aggregatedKnowledge = Utils.makeGaussian(aggregated);
+				}
+		} else
+		{
+			ScriptEngine script = new ScriptEngineManager().getEngineByName("nashorn");
+			File file = null;
+			if (settings.getProperty("aggregation_type").equals("script")) file = new File(settings.getProperty("aggregation_value"));
+
+			int invalid = 0;
+			double[] scores = new double[metrics.size()];
+			double[] aggregated = new double[Sequence.DRAWS];
+			for (Sequence sequence : allSequences)
+				for (Problem problem : sequence.problems)
+				{
+					for (int d = 0; d < Sequence.DRAWS; ++d)
+					{
+						if (file == null)
+						{
+							aggregated[d] = aggregationBase;
+							// if (allSequences.indexOf(sequence) <= 10 && d == 0) log();
+							for (Metric metric : metrics)
+							{
+								/* if (allSequences.indexOf(sequence) <= 10 && d == 0) log(metric.name + ": " + metric.weight + " * " + metric.initialDistribution.unreduce(sequence.finalProblem().metricKnowledge.get(metric).next())); */
+								aggregated[d] += metric.weight * metric.initialDistribution.unreduce(problem.metricKnowledge.get(metric).next());
+							}
+						} else try
+						{
+							for (int m = 0; m < metrics.size(); ++m)
+								scores[m] = metrics.get(m).initialDistribution.unreduce(problem.metricKnowledge.get(metrics.get(m)).next());
+
+							// Input: double[] containing scores for each metric for a single problem.
+							// Output: aggregated score as a double.
+							script.put("metrics", scores);
+							script.eval(new BufferedReader(new FileReader(file)));
+							aggregated[d] = (double) script.get("aggregated");
+						} catch (FileNotFoundException e)
+						{
+							log("Couldn't find aggregation script: " + settings.getProperty("aggregation_script"));
+							return false;
+						} catch (Exception e)
+						{
+							log("Error while aggregating metrics:\n" + e.getMessage());
+							return false;
+						}
+						if (aggregated[d] >= 1) aggregated[d] = 1;
+					}
+					problem.aggregatedKnowledge = Utils.makeGaussian(aggregated);
+					if (problem.aggregatedKnowledge.mean > 1) ++invalid;
+
+				}
+			if (invalid != 0) log("Found " + invalid + " invalid knowledge values!");
+		}
 
 		return true;
 	}
@@ -275,24 +318,12 @@ public class Main
 		double precision = 0;
 		int count = 0;
 		for (Sequence sequence : sequences)
-		{
-			Problem best = sequence.finalProblem();
-			// Find problem with smallest distance to expected
-			for (Problem p : sequence.problems)
-				if (Math.abs(p.expectedKnowledge - p.knowledge.mean) < Math.abs(best.expectedKnowledge - best.knowledge.mean)) best = p;
-
-			// Use it and all problems after
-			for (int i = sequence.problems.indexOf(best); i < sequence.problems.size(); ++i)
-			{
-				Problem current = sequence.problems.get(i);
-				if (!aggregated || (current.aggregatedKnowledge.mean <= 1 && current.aggregatedKnowledge.mean >= 0))
+			for (Problem problem : sequence.problems)
+				if (problem.isRepresentative)
 				{
 					++count;
-					precision += Math.pow(sequence.finalProblem().expectedKnowledge - (aggregated ? current.aggregatedKnowledge : current.knowledge).mean, 2);
+					precision += Math.pow(sequence.finalProblem().expectedKnowledge - (aggregated ? problem.aggregatedKnowledge : problem.knowledge).mean, 2);
 				}
-			}
-
-		}
 
 		return Math.sqrt(precision / count);
 	}
@@ -552,6 +583,23 @@ public class Main
 			sequence.findKnowledgeSequence();
 	}
 
+	/** Determines which Problems should be used to compute Precision. */
+	private static void findRepresentativeProblems()
+	{
+		for (Sequence sequence : allSequences)
+		{
+			Problem best = sequence.finalProblem();
+			// Find problem with smallest distance to expected
+			for (Problem p : sequence.problems)
+				if (Math.abs(p.expectedKnowledge - p.knowledge.mean) < Math.abs(best.expectedKnowledge - best.knowledge.mean)) best = p;
+
+			// Use it and all problems after
+			for (int i = sequence.problems.indexOf(best); i < sequence.problems.size(); ++i)
+				sequence.problems.get(i).isRepresentative = true;
+
+		}
+	}
+
 	/** @return The Sequence matching the input ID. Creates a new one if doesn't exist. */
 	private static Sequence findSequence(ArrayList<Sequence> set, String id)
 	{
@@ -593,7 +641,7 @@ public class Main
 			settings.load(new FileInputStream(new File("settings.properties")));
 			for (String property : new String[]
 			{ "aggregation_type", "aggregation_value", "correctness", "cross_validation", "expected_binary", "input_file", "metric_threshold", "metrics",
-					"output_metrics", "output_params", "output_sequences", "output_svm", "scores", "split" })
+					"output_metrics", "output_params", "output_sequences", "scores", "split" })
 
 				if (!settings.containsKey(property))
 				{
@@ -659,12 +707,13 @@ public class Main
 		for (Metric metric : metrics)
 			applyKnowledgeTracing(metric);
 
+		findRepresentativeProblems();
+
 		if (metrics.size() != 0) aggregateMetrics();
 
 		if (!settings.getProperty("output_params").equals("null")) exportData(new File(settings.getProperty("output_params")), outputParams());
 		if (!settings.getProperty("output_sequences").equals("null")) exportData(new File(settings.getProperty("output_sequences")), outputProblems());
 		if (!settings.getProperty("output_metrics").equals("null")) exportData(new File(settings.getProperty("output_metrics")), outputMetrics());
-		if (!settings.getProperty("output_svm").equals("null")) exportData(new File(settings.getProperty("output_svm")), outputSVM());
 		log("Done!");
 	}
 
@@ -770,7 +819,11 @@ public class Main
 	/** @return The file to be processed for SVM. */
 	private static String[][] outputSVM()
 	{
-		String[][] data = new String[allSequences.size()][2 + metrics.size()];
+		int size = 0;
+		for (Sequence sequence : allSequences)
+			for (Problem problem : sequence.problems)
+				if (problem.isRepresentative) ++size;
+		String[][] data = new String[size][2 + metrics.size()];
 
 		data[0][0] = "sequence";
 		for (int i = 0; i < metrics.size(); ++i)
@@ -779,13 +832,15 @@ public class Main
 
 		int current = 0;
 		for (Sequence sequence : allSequences)
-		{
-			data[current][0] = sequence.name;
-			for (int i = 0; i < metrics.size(); ++i)
-				data[current][i + 1] = Double.toString(metrics.get(i).initialDistribution.unreduce(sequence.finalProblem().metricScores.get(metrics.get(i))));
-			data[current][1 + metrics.size()] = Double.toString(sequence.finalProblem().expectedKnowledge);
-			++current;
-		}
+			for (Problem problem : sequence.problems)
+				if (problem.isRepresentative)
+				{
+					data[current][0] = sequence.name;
+					for (int i = 0; i < metrics.size(); ++i)
+						data[current][i + 1] = Double.toString(metrics.get(i).initialDistribution.unreduce(problem.metricScores.get(metrics.get(i))));
+					data[current][1 + metrics.size()] = Double.toString(problem.expectedKnowledge);
+					++current;
+				}
 
 		return data;
 	}

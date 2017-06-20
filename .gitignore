@@ -12,3 +12,10 @@ full-dopan-file.csv
 output-params-reviews.csv
 output-params-dopan.csv
 settings.properties-reviews
+*.csv
+settings.properties-dopan
+*.properties-11
+resultat.csv
+*.txt
+.~lock.reviews-normalized-24.csv#
+resultat.csv
