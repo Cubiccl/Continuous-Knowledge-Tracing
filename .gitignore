@@ -19,3 +19,5 @@ resultat.csv
 *.txt
 .~lock.reviews-normalized-24.csv#
 resultat.csv
+settings.properties-24
+*.csv

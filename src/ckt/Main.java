@@ -2,10 +2,7 @@ package ckt;
 
 import java.io.*;
 import java.nio.charset.Charset;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.Properties;
+import java.util.*;
 import java.util.function.Predicate;
 
 import javax.script.ScriptEngine;
@@ -31,7 +28,7 @@ public class Main
 	static ArrayList<String> log = new ArrayList<String>();
 	/** The parameters for main Knowledge. */
 	static KTParameters[] mainParameters;
-	/** The name of the metrics available. */
+	/** The available metrics. */
 	static ArrayList<Metric> metrics;
 	/** Settings from settings.properties */
 	static Properties settings;
@@ -59,23 +56,32 @@ public class Main
 				System.out.println("SVM file not found");
 				return false;
 			}
+
 			try
 			{
-				Runtime.getRuntime().exec("python " + settings.getProperty("aggregation_value"));
+				System.out.println("Running python SVM...");
+				Process p = Runtime.getRuntime().exec("python " + settings.getProperty("aggregation_value"));
+				while (p.isAlive())
+					Thread.sleep(100);
 			} catch (IOException e)
 			{
 				e.printStackTrace();
 				return false;
+			} catch (InterruptedException e)
+			{
+				e.printStackTrace();
 			}
 
+			System.out.println("SVM completed.");
 			// Gathering SVM data
 			String weightsData = Utils.readTextFile("weights.txt");
 			weightsData = weightsData.replaceAll("\\n", "").replaceAll("\\[", "").replaceAll("\\]", "");
 			while (weightsData.contains("  "))
 				weightsData = weightsData.replaceAll("  ", " ");
 			String[] weights = weightsData.split(" ");
-			for (int i = 1; i < weights.length; ++i)
-				metrics.get(i - 1).weight = Double.parseDouble(weights[i]);
+			if (weights.length < metrics.size()) log("SVM failed !");
+			for (int i = 1; i <= metrics.size(); ++i)
+				metrics.get(i - 1).weight = Double.parseDouble(weights[i]) * 1. / 1000000.;
 
 			// Aggregating
 			double[] aggregated = new double[Sequence.DRAWS];
@@ -140,7 +146,6 @@ public class Main
 				}
 			if (invalid != 0) log("Found " + invalid + " invalid knowledge values!");
 		}
-
 		return true;
 	}
 
@@ -153,7 +158,6 @@ public class Main
 
 		KTParameters[] params = new KTParameters[validations + 2];
 		if (metric == null) mainParameters = params;
-		else params = mainParameters;
 
 		for (int i = 0; i < validations; ++i)
 		{
@@ -166,7 +170,7 @@ public class Main
 			params[i] = computeParameters();
 			computeKnowledge(params[i], metric);
 		}
-		computeStats(params);
+		if (metric == null) computeStats(params);
 	}
 
 	/** Uses the input <code>threshold</code> to determine the correctness of the problem. */
@@ -188,7 +192,8 @@ public class Main
 
 	/** 1) Removes empty sequences.<br />
 	 * 2) Sorts problems in sequences chronologically.<br />
-	 * 3) Reduces and centers problem scores between 0 and 1 if <code>center</code> is true. 4) Reduces and centers metric scores between 0 and 1 if <code>centerMetrics</code> is true. */
+	 * 3) Reduces and centers problem scores between 0 and 1 if <code>center</code> is true.<br />
+	 * 4) Reduces and centers metric scores between 0 and 1 if <code>centerMetrics</code> is true. */
 	static void cleanSequences(boolean center, boolean centerMetrics)
 	{
 		allSequences.removeIf(new Predicate<Sequence>()
@@ -249,45 +254,45 @@ public class Main
 			sequence.computeKnowledge(parameters, metric);
 	}
 
-	/** Determines P(L0), P(T), P(G), P(S) */
+	/** Determines P(L0), P(T), P(G), P(S). Analyses the {@link Main#learningSet learning set} and returns the parameters. */
 	private static KTParameters computeParameters()
 	{
 		double kStart = 0, mTransition = 0, mGuess = 0, mSlip = 0;
-		int s = 0;
 
 		// P(L0)
-		int tSize = 0, gSize = 0, sSize = 0;
+		int count = 0;
 		for (Sequence sequence : learningSet)
 		{
 			kStart += sequence.knowledgeSequence.get(0);
-			++s;
-			/* if (sequence.knowledgeSequence.size() > 1) { kStart += sequence.knowledgeSequence.get(1); ++s; } if (sequence.knowledgeSequence.size() > 2) { kStart += sequence.knowledgeSequence.get(2); ++s; } */
+			++count;
+			/* Tried using more than one for starting knowledge, but had close to no impact. if (sequence.knowledgeSequence.size() > 1) { kStart += sequence.knowledgeSequence.get(1); ++s; } if (sequence.knowledgeSequence.size() > 2) { kStart += sequence.knowledgeSequence.get(2); ++s; } */
 		}
-		kStart /= s;
+		kStart /= count;
 
 		// mu(P(T)), mu(P(G)), mu(P(S))
+		int tCount = 0, gCount = 0, sCount = 0;
 		for (Sequence sequence : learningSet)
 		{
 			sequence.computeProbabilities(kStart);
 			if (!Double.isNaN(sequence.parameters.transition))
 			{
 				mTransition += sequence.parameters.transition;
-				++tSize;
+				++tCount;
 			}
 			if (!Double.isNaN(sequence.parameters.guess.mean))
 			{
 				mGuess += sequence.parameters.guess.next();
-				++gSize;
+				++gCount;
 			}
 			if (!Double.isNaN(sequence.parameters.slip.mean))
 			{
 				mSlip += sequence.parameters.slip.next();
-				++sSize;
+				++sCount;
 			}
 		}
-		mTransition /= tSize;
-		mGuess /= gSize;
-		mSlip /= sSize;
+		mTransition /= tCount;
+		mGuess /= gCount;
+		mSlip /= sCount;
 
 		// sigma(P(G)), sigma(P(S))
 		// double sTransition = 0;
@@ -299,8 +304,8 @@ public class Main
 			if (!Double.isNaN(sequence.parameters.slip.mean)) sSlip += Math.pow(sequence.parameters.slip.mean - mSlip, 2);
 		}
 		// sTransition = Math.sqrt(sTransition / tSize);
-		sGuess = Math.sqrt(sGuess / gSize);
-		sSlip = Math.sqrt(sSlip / sSize);
+		sGuess = Math.sqrt(sGuess / gCount);
+		sSlip = Math.sqrt(sSlip / sCount);
 
 		// Can happen if threshold is too low or too high
 		if (Double.isNaN(mGuess)) mGuess = 0;
@@ -311,21 +316,27 @@ public class Main
 		return new KTParameters(kStart, mTransition, new Gaussian(mGuess, sGuess), new Gaussian(mSlip, sSlip));
 	}
 
-	/** @return The Precision for the Knowledge for the input sequences.
-	 * @param aggregated - If true, will compute the Precision for the aggregated Knowledge. */
+	/** @param aggregated - If true, will compute the Precision for the aggregated Knowledge.
+	 * @return The Precision for the Knowledge for the input sequences. */
 	private static double computePrecision(ArrayList<Sequence> sequences, boolean aggregated)
 	{
 		double precision = 0;
-		int count = 0;
+		int problems;// Number of representative problems in current sequence
+		double threshold = Double.parseDouble(settings.getProperty("knowledge_threshold"));
 		for (Sequence sequence : sequences)
+		{
+			problems = -1;
 			for (Problem problem : sequence.problems)
 				if (problem.isRepresentative)
 				{
-					++count;
-					precision += Math.pow(sequence.finalProblem().expectedKnowledge - (aggregated ? problem.aggregatedKnowledge : problem.knowledge).mean, 2);
+					if (problems == -1) problems = sequence.problems.size() - sequence.problems.indexOf(problem);
+					precision += Math.pow(sequence.finalProblem().expectedKnowledge
+							- ((aggregated ? problem.aggregatedKnowledge : problem.knowledge).mean >= threshold ? 1 : 0), 2)
+							/ problems;
 				}
+		}
 
-		return Math.sqrt(precision / count);
+		return Math.sqrt(precision / allSequences.size());
 	}
 
 	/** Uses the metrics to calculate the score of each problem.
@@ -411,8 +422,8 @@ public class Main
 		parametersArray[validations + 1] = new KTParameters(sStart, sTransition, null, null);
 	}
 
-	/** @return The variation for the final Knowledge for the input sequences.
-	 * @param aggregated - If true, will compute the variation for the aggregated Knowledge. */
+	/** @param aggregated - If true, will compute the variation for the aggregated Knowledge.
+	 * @return The variation for the final Knowledge for the input sequences. */
 	private static double computeVariation(ArrayList<Sequence> sequences, boolean aggregated)
 	{
 		double variation = 0;
@@ -588,15 +599,17 @@ public class Main
 	{
 		for (Sequence sequence : allSequences)
 		{
-			Problem best = sequence.finalProblem();
-			// Find problem with smallest distance to expected
-			for (Problem p : sequence.problems)
-				if (Math.abs(p.expectedKnowledge - p.knowledge.mean) < Math.abs(best.expectedKnowledge - best.knowledge.mean)) best = p;
+			if (settings.getProperty("smooth_rmse").equals("true"))
+			{
+				Problem best = sequence.finalProblem();
+				// Find problem with smallest distance to expected
+				for (Problem p : sequence.problems)
+					if (Math.abs(p.expectedKnowledge - p.knowledge.mean) < Math.abs(best.expectedKnowledge - best.knowledge.mean)) best = p;
 
-			// Use it and all problems after
-			for (int i = sequence.problems.indexOf(best); i < sequence.problems.size(); ++i)
-				sequence.problems.get(i).isRepresentative = true;
-
+				// Use it and all problems after
+				for (int i = sequence.problems.indexOf(best); i < sequence.problems.size(); ++i)
+					sequence.problems.get(i).isRepresentative = true;
+			} else sequence.finalProblem().isRepresentative = true;
 		}
 	}
 
@@ -618,7 +631,15 @@ public class Main
 
 	public static void main(String[] args)
 	{
-		mainMethod();
+		try
+		{
+			mainMethod();
+		} catch (Exception e)
+		{
+			log("Error: " + e.getMessage());
+			e.printStackTrace();
+		}
+
 		File f = new File("log.txt");
 		try
 		{
@@ -640,9 +661,8 @@ public class Main
 			settings = new Properties();
 			settings.load(new FileInputStream(new File("settings.properties")));
 			for (String property : new String[]
-			{ "aggregation_type", "aggregation_value", "correctness", "cross_validation", "expected_binary", "input_file", "metric_threshold", "metrics",
-					"output_metrics", "output_params", "output_sequences", "scores", "split" })
-
+			{ "aggregation_type", "aggregation_value", "correctness", "cross_validation", "knowledge_threshold", "input_file", "metric_threshold", "metrics",
+					"output_metrics", "output_params", "output_sequences", "scores", "smooth_rmse", "split" })
 				if (!settings.containsKey(property))
 				{
 					log("Missing setting: " + property);
@@ -693,6 +713,17 @@ public class Main
 			return;
 		}
 
+		int s = 0;
+		for (Sequence sequence : allSequences)
+			if (sequence.problems.get(0).isCorrect) ++s;
+		System.out.println(s * 1. / allSequences.size());
+
+		s = 0;
+		for (Sequence sequence : allSequences)
+			for (Problem problem : sequence.problems)
+				if (problem.isCorrect) ++s;
+		System.out.println(s * 1. / totalProblems);
+
 		try
 		{
 			testingSize = (int) Math.ceil(allSequences.size() * Double.parseDouble(settings.getProperty("cross_validation")));
@@ -720,7 +751,7 @@ public class Main
 	/** @return The Knowledge associated with each problem. */
 	private static String[][] outputMetrics()
 	{
-		String[][] data = new String[totalProblems * metrics.size()][5];
+		String[][] data = new String[totalProblems * metrics.size() + 1][5];
 
 		data[0][0] = "sequence";
 		data[0][1] = "problem";
@@ -728,7 +759,7 @@ public class Main
 		data[0][3] = "input";
 		data[0][4] = "learned";
 
-		int current = 0;
+		int current = 1;
 		for (Sequence sequence : allSequences)
 			for (Problem problem : sequence.problems)
 				for (Metric metric : metrics)
@@ -736,8 +767,8 @@ public class Main
 					data[current][0] = sequence.name;
 					data[current][1] = problem.name;
 					data[current][2] = metric.name;
-					data[current][3] = Double.toString(metric.initialDistribution.unreduce(problem.metricScores.get(metric)));
-					data[current][4] = Double.toString(metric.initialDistribution.unreduce(problem.metricKnowledge.get(metric).mean));
+					data[current][3] = Utils.toString(metric.initialDistribution.unreduce(problem.metricScores.get(metric)));
+					data[current][4] = Utils.toString(metric.initialDistribution.unreduce(problem.metricKnowledge.get(metric).mean));
 					++current;
 				}
 
@@ -752,34 +783,34 @@ public class Main
 		output[0][1] = "value";
 
 		output[1][0] = "P(L0)";
-		output[1][1] = Double.toString(mainParameters[validations].startKnowledge);
+		output[1][1] = Utils.toString(mainParameters[validations].startKnowledge);
 
 		output[2][0] = "P(T)";
-		output[2][1] = Double.toString(mainParameters[validations].transition);
+		output[2][1] = Utils.toString(mainParameters[validations].transition);
 
 		output[3][0] = "mean(P(G))";
-		output[3][1] = Double.toString(mainParameters[validations].guess.mean);
+		output[3][1] = Utils.toString(mainParameters[validations].guess.mean);
 
 		output[4][0] = "variation(P(G))";
-		output[4][1] = Double.toString(mainParameters[validations].guess.variation);
+		output[4][1] = Utils.toString(mainParameters[validations].guess.variation);
 
 		output[5][0] = "mean(P((S))";
-		output[5][1] = Double.toString(mainParameters[validations].slip.mean);
+		output[5][1] = Utils.toString(mainParameters[validations].slip.mean);
 
 		output[6][0] = "variation(P(S))";
-		output[6][1] = Double.toString(mainParameters[validations].slip.variation);
+		output[6][1] = Utils.toString(mainParameters[validations].slip.variation);
 
 		output[7][0] = "Knowledge Precision";
-		output[7][1] = Double.toString(computePrecision(allSequences, false));
+		output[7][1] = Utils.toString(computePrecision(allSequences, false));
 
 		output[8][0] = "Knowledge Variation";
-		output[8][1] = Double.toString(computeVariation(allSequences, false));
+		output[8][1] = Utils.toString(computeVariation(allSequences, false));
 
 		output[9][0] = "Aggregated Precision";
-		output[9][1] = Double.toString(computePrecision(allSequences, true));
+		output[9][1] = Utils.toString(computePrecision(allSequences, true));
 
 		output[10][0] = "Aggregated Variation";
-		output[10][1] = Double.toString(computeVariation(allSequences, true));
+		output[10][1] = Utils.toString(computeVariation(allSequences, true));
 
 		return output;
 	}
@@ -787,29 +818,32 @@ public class Main
 	/** @return The Knowledge associated with each problem. */
 	private static String[][] outputProblems()
 	{
-		String[][] data = new String[totalProblems][8];
+		String[][] data = new String[totalProblems + 1][9];
 
 		data[0][0] = "sequence";
 		data[0][1] = "problem";
 		data[0][2] = "computed_knowledge";
 		data[0][3] = "computed_variation";
-		data[0][4] = "distance_to_expected";
-		data[0][5] = "aggregated_knowledge";
-		data[0][6] = "aggregated_variation";
-		data[0][7] = "aggregated_distance_to_expected";
+		data[0][4] = "aggregated_knowledge";
+		data[0][5] = "aggregated_variation";
+		data[0][6] = "learned";
+		data[0][7] = "learned_aggregation";
+		data[0][8] = "expected";
 
-		int current = 0;
+		int current = 1;
+		double threshold = Double.parseDouble(settings.getProperty("knowledge_threshold"));
 		for (Sequence sequence : allSequences)
 			for (Problem problem : sequence.problems)
 			{
 				data[current][0] = sequence.name;
 				data[current][1] = problem.name;
-				data[current][2] = Double.toString(problem.knowledge.mean);
-				data[current][3] = Double.toString(problem.knowledge.variation);
-				data[current][4] = Double.toString(Math.abs(problem.expectedKnowledge - problem.knowledge.mean));
-				data[current][5] = Double.toString(problem.aggregatedKnowledge.mean);
-				data[current][6] = Double.toString(problem.aggregatedKnowledge.variation);
-				data[current][7] = Double.toString(Math.abs(problem.expectedKnowledge - problem.aggregatedKnowledge.mean));
+				data[current][2] = Utils.toString(problem.knowledge.mean);
+				data[current][3] = Utils.toString(problem.knowledge.variation);
+				data[current][4] = Utils.toString(problem.aggregatedKnowledge.mean);
+				data[current][5] = Utils.toString(problem.aggregatedKnowledge.variation);
+				data[current][6] = problem.knowledge.mean > threshold ? "1" : "0";
+				data[current][7] = problem.aggregatedKnowledge.mean > threshold ? "1" : "0";
+				data[current][8] = Utils.toString(problem.expectedKnowledge);
 				++current;
 			}
 
@@ -823,22 +857,23 @@ public class Main
 		for (Sequence sequence : allSequences)
 			for (Problem problem : sequence.problems)
 				if (problem.isRepresentative) ++size;
-		String[][] data = new String[size][2 + metrics.size()];
+		String[][] data = new String[size + 1][2 + metrics.size()];
 
-		data[0][0] = "sequence";
+		data[0][0] = "problem";
 		for (int i = 0; i < metrics.size(); ++i)
 			data[0][i + 1] = metrics.get(i).name;
 		data[0][1 + metrics.size()] = "expected";
 
-		int current = 0;
+		int current = 1;
+		double threshold = Double.parseDouble(settings.getProperty("knowledge_threshold"));
 		for (Sequence sequence : allSequences)
 			for (Problem problem : sequence.problems)
 				if (problem.isRepresentative)
 				{
-					data[current][0] = sequence.name;
+					data[current][0] = problem.name;
 					for (int i = 0; i < metrics.size(); ++i)
-						data[current][i + 1] = Double.toString(metrics.get(i).initialDistribution.unreduce(problem.metricScores.get(metrics.get(i))));
-					data[current][1 + metrics.size()] = Double.toString(problem.expectedKnowledge);
+						data[current][i + 1] = Utils.toString(metrics.get(i).initialDistribution.unreduce(problem.metricScores.get(metrics.get(i))));
+					data[current][1 + metrics.size()] = problem.expectedKnowledge >= threshold ? "1" : "0";
 					++current;
 				}
 

@@ -1,6 +1,7 @@
 package ckt;
 
 import java.io.*;
+import java.text.DecimalFormat;
 
 import ckt.KTParameters.Gaussian;
 
@@ -81,6 +82,11 @@ public class Utils
 			e.printStackTrace();
 			return null;
 		}
+	}
+
+	public static String toString(double d)
+	{
+		return (new DecimalFormat("#.##########").format(d)).replaceAll(",", ".");
 	}
 
 }

@@ -16,7 +16,7 @@ from sklearn.grid_search import RandomizedSearchCV
 
 # load data
 csv_file = 'resultat.csv'
-dataset = np.genfromtxt(csv_file, dtype=float, delimiter=',', skip_header=0)
+dataset = np.genfromtxt(csv_file, dtype=float, delimiter=',', skip_header=1)
 weights_file = open('weights.txt', 'w')
 output_file = open('output.txt', 'w')
 
@@ -56,7 +56,7 @@ print()
 
 # evaluate by cross validation
 svm_clf.set_params(C = best_C)
-nb_folds = 6
+nb_folds = 10
 start_time=time.time()
 scores_acc = cross_validation.cross_val_score(svm_clf, X_test, y_test, cv = nb_folds, scoring = 'accuracy')
 end_time=time.time()

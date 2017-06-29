@@ -57,19 +57,15 @@ public class Sequence implements Comparable<Sequence>
 	/** Finds and sets the Knowledge after sequence n. */
 	private Gaussian computeKnowledge(int n, KTParameters parameters, Metric metric)
 	{
-		if (n == 0)
-		{
-			Gaussian k = new Gaussian(parameters.startKnowledge, 0);
-			if (metric == null) this.problems.get(0).knowledge = k;
-			else this.problems.get(0).metricKnowledge.put(metric, k);
-			return k;
-		}
+		if (n == -1) return new Gaussian(parameters.startKnowledge, 0);
 
 		Gaussian k = this.computeKnowledge(this.computeKnowledge(n - 1, parameters, metric),
 				(metric == null ? this.problems.get(n).score : this.problems.get(n).metricScores.get(metric)), parameters);
 		if (metric == null) this.problems.get(n).knowledge = k;
 		else this.problems.get(n).metricKnowledge.put(metric, k);
 
+		/*if (Main.allSequences.indexOf(this) == 0) System.out.println((metric == null ? "general" : metric.name) + ", " + n + " : "
+				+ this.problems.get(n).knowledge);*/
 		return this.problems.get(n).knowledge;
 	}
 
