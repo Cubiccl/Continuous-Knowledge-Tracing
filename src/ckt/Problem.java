@@ -41,6 +41,16 @@ public class Problem implements Comparable<Problem>
 		this.metricKnowledge = new HashMap<Metric, Gaussian>();
 	}
 
+	/** @return A copy of this Problem, with scores as expected. */
+	public Problem asExpected()
+	{
+		Problem copy = new Problem(this.name, this.index);
+		copy.score = this.expectedKnowledge;
+		copy.index = this.index;
+		copy.isCorrect = this.isCorrect;
+		return copy;
+	}
+
 	@Override
 	public int compareTo(Problem o)
 	{

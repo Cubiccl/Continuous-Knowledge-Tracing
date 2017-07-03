@@ -29,6 +29,15 @@ public class Sequence implements Comparable<Sequence>
 		this.problems = new ArrayList<Problem>();
 	}
 
+	/** @return A copy of this Sequence, with scores corresponding to expected values. */
+	public Sequence asExpected()
+	{
+		Sequence copy = new Sequence(this.name);
+		for (Problem p : this.problems)
+			copy.problems.add(p.asExpected());
+		return copy;
+	}
+
 	@Override
 	public int compareTo(Sequence o)
 	{
@@ -64,8 +73,7 @@ public class Sequence implements Comparable<Sequence>
 		if (metric == null) this.problems.get(n).knowledge = k;
 		else this.problems.get(n).metricKnowledge.put(metric, k);
 
-		/*if (Main.allSequences.indexOf(this) == 0) System.out.println((metric == null ? "general" : metric.name) + ", " + n + " : "
-				+ this.problems.get(n).knowledge);*/
+		/* if (Main.allSequences.indexOf(this) == 0) System.out.println((metric == null ? "general" : metric.name) + ", " + n + " : " + this.problems.get(n).knowledge); */
 		return this.problems.get(n).knowledge;
 	}
 

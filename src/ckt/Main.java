@@ -47,34 +47,44 @@ public class Main
 	private static boolean aggregateMetrics()
 	{
 		log("Aggregating metrics...");
-		if (settings.getProperty("aggregation_type").equals("svm"))
+		if (settings.getProperty("aggregation_type").equals("svm") || settings.getProperty("aggregation_type").equals("input"))
 		{
 			// Applying SVM script
-			exportData(new File("resultat.csv"), outputSVM());
-			if (!new File(settings.getProperty("aggregation_value")).exists())
+			exportData(new File("resultat.csv"), outputSVM(settings.getProperty("aggregation_type").equals("svm")));
+
+			if (settings.getProperty("aggregation_type").equals("svm"))
 			{
-				System.out.println("SVM file not found");
-				return false;
+				if (!new File(settings.getProperty("aggregation_value")).exists())
+				{
+					System.out.println("SVM file not found");
+					return false;
+				}
+
+				try
+				{
+					System.out.println("Running python SVM...");
+					Process p = Runtime.getRuntime().exec("python " + settings.getProperty("aggregation_value"));
+					while (p.isAlive())
+						Thread.sleep(100);
+				} catch (IOException e)
+				{
+					e.printStackTrace();
+					return false;
+				} catch (InterruptedException e)
+				{
+					e.printStackTrace();
+				}
+
+				System.out.println("SVM completed.");
+			} else
+			{
+				System.out.println("Waiting... Press Enter when the weights file is ready.");
+				new Scanner(System.in).nextLine();
 			}
 
-			try
-			{
-				System.out.println("Running python SVM...");
-				Process p = Runtime.getRuntime().exec("python " + settings.getProperty("aggregation_value"));
-				while (p.isAlive())
-					Thread.sleep(100);
-			} catch (IOException e)
-			{
-				e.printStackTrace();
-				return false;
-			} catch (InterruptedException e)
-			{
-				e.printStackTrace();
-			}
-
-			System.out.println("SVM completed.");
 			// Gathering SVM data
-			String weightsData = Utils.readTextFile("weights.txt");
+			String weightsData = Utils.readTextFile(settings.getProperty("aggregation_type").equals("svm") ? "weights.txt" : settings
+					.getProperty("aggregation_value"));
 			weightsData = weightsData.replaceAll("\\n", "").replaceAll("\\[", "").replaceAll("\\]", "");
 			while (weightsData.contains("  "))
 				weightsData = weightsData.replaceAll("  ", " ");
@@ -254,7 +264,7 @@ public class Main
 			sequence.computeKnowledge(parameters, metric);
 	}
 
-	/** Determines P(L0), P(T), P(G), P(S). Analyses the {@link Main#learningSet learning set} and returns the parameters. */
+	/** Determines P(L0), P(T), P(G), P(S). Analyzes the {@link Main#learningSet learning set} and returns the parameters. */
 	private static KTParameters computeParameters()
 	{
 		double kStart = 0, mTransition = 0, mGuess = 0, mSlip = 0;
@@ -322,7 +332,7 @@ public class Main
 	{
 		double precision = 0;
 		int problems;// Number of representative problems in current sequence
-		double threshold = Double.parseDouble(settings.getProperty("knowledge_threshold"));
+		double threshold = settings.getProperty("expected_binary").equals("false") ? -1 : Double.parseDouble(settings.getProperty("expected_binary"));
 		for (Sequence sequence : sequences)
 		{
 			problems = -1;
@@ -330,7 +340,12 @@ public class Main
 				if (problem.isRepresentative)
 				{
 					if (problems == -1) problems = sequence.problems.size() - sequence.problems.indexOf(problem);
-					precision += Math.pow(sequence.finalProblem().expectedKnowledge
+					if (aggregated && problem.aggregatedKnowledge == null) continue;
+
+					if (threshold == -1) precision += Math.pow(sequence.finalProblem().expectedKnowledge
+							- (aggregated ? problem.aggregatedKnowledge : problem.knowledge).mean, 2)
+							/ problems;
+					else precision += Math.pow(sequence.finalProblem().expectedKnowledge
 							- ((aggregated ? problem.aggregatedKnowledge : problem.knowledge).mean >= threshold ? 1 : 0), 2)
 							/ problems;
 				}
@@ -427,13 +442,19 @@ public class Main
 	private static double computeVariation(ArrayList<Sequence> sequences, boolean aggregated)
 	{
 		double variation = 0;
-		int count = 0;
+		int count = 0, problems = -1;
 		for (Sequence sequence : sequences)
-			if (!aggregated || (sequence.finalProblem().aggregatedKnowledge.mean <= 1 && sequence.finalProblem().aggregatedKnowledge.mean >= 0))
-			{
-				++count;
-				variation += (aggregated ? sequence.finalProblem().aggregatedKnowledge : sequence.finalProblem().knowledge).variation;
-			}
+		{
+			problems = -1;
+			++count;
+			for (Problem problem : sequence.problems)
+				if (problem.isRepresentative)
+				{
+					if (problems == -1) problems = sequence.problems.size() - sequence.problems.indexOf(problem);
+					if (aggregated && problem.aggregatedKnowledge == null) continue;
+					variation += (aggregated ? sequence.finalProblem().aggregatedKnowledge : sequence.finalProblem().knowledge).variation / problems;
+				}
+		}
 
 		return variation / count;
 	}
@@ -623,6 +644,30 @@ public class Main
 		return s;
 	}
 
+	/** Applies Knowledge Tracing on the expected score to find the Expected Knowledge. */
+	private static void knowledgeTracingOnExpected()
+	{
+		// Stores the real sequences while applying on expected.
+		ArrayList<Sequence> sequences = new ArrayList<Sequence>();
+		sequences.addAll(allSequences);
+		allSequences.clear();
+
+		// Stores the real parameters while applying on expected.
+		KTParameters[] params = mainParameters;
+
+		for (Sequence sequence : sequences)
+			allSequences.add(sequence.asExpected());
+
+		applyKnowledgeTracing(null);
+		for (int seq = 0; seq < sequences.size(); ++seq)
+			for (int prob = 0; prob < sequences.get(seq).problems.size(); ++prob)
+				sequences.get(seq).problems.get(prob).expectedKnowledge = allSequences.get(seq).problems.get(prob).knowledge.mean;
+
+		allSequences.clear();
+		allSequences.addAll(sequences);
+		mainParameters = params;
+	}
+
 	public static void log(String text)
 	{
 		System.out.println(text);
@@ -633,7 +678,7 @@ public class Main
 	{
 		try
 		{
-			mainMethod();
+			mainMethod(args.length != 0 ? args[0] : "settings.properties");
 		} catch (Exception e)
 		{
 			log("Error: " + e.getMessage());
@@ -653,16 +698,16 @@ public class Main
 		}
 	}
 
-	private static void mainMethod()
+	private static void mainMethod(String propertiesPath)
 	{
 
 		try
 		{
 			settings = new Properties();
-			settings.load(new FileInputStream(new File("settings.properties")));
+			settings.load(new FileInputStream(new File(propertiesPath)));
 			for (String property : new String[]
-			{ "aggregation_type", "aggregation_value", "correctness", "cross_validation", "knowledge_threshold", "input_file", "metric_threshold", "metrics",
-					"output_metrics", "output_params", "output_sequences", "scores", "smooth_rmse", "split" })
+			{ "aggregation_type", "aggregation_value", "correctness", "cross_validation", "input_file", "metric_threshold", "metrics", "output_metrics",
+					"output_params", "output_sequences", "scores", "smooth_rmse", "split" })
 				if (!settings.containsKey(property))
 				{
 					log("Missing setting: " + property);
@@ -741,6 +786,8 @@ public class Main
 		findRepresentativeProblems();
 
 		if (metrics.size() != 0) aggregateMetrics();
+
+		knowledgeTracingOnExpected();
 
 		if (!settings.getProperty("output_params").equals("null")) exportData(new File(settings.getProperty("output_params")), outputParams());
 		if (!settings.getProperty("output_sequences").equals("null")) exportData(new File(settings.getProperty("output_sequences")), outputProblems());
@@ -831,7 +878,7 @@ public class Main
 		data[0][8] = "expected";
 
 		int current = 1;
-		double threshold = Double.parseDouble(settings.getProperty("knowledge_threshold"));
+		double threshold = settings.getProperty("expected_binary").equals("false") ? -1 : Double.parseDouble(settings.getProperty("expected_binary"));
 		for (Sequence sequence : allSequences)
 			for (Problem problem : sequence.problems)
 			{
@@ -839,10 +886,10 @@ public class Main
 				data[current][1] = problem.name;
 				data[current][2] = Utils.toString(problem.knowledge.mean);
 				data[current][3] = Utils.toString(problem.knowledge.variation);
-				data[current][4] = Utils.toString(problem.aggregatedKnowledge.mean);
-				data[current][5] = Utils.toString(problem.aggregatedKnowledge.variation);
+				data[current][4] = problem.aggregatedKnowledge == null ? "N/A" : Utils.toString(problem.aggregatedKnowledge.mean);
+				data[current][5] = problem.aggregatedKnowledge == null ? "N/A" : Utils.toString(problem.aggregatedKnowledge.variation);
 				data[current][6] = problem.knowledge.mean > threshold ? "1" : "0";
-				data[current][7] = problem.aggregatedKnowledge.mean > threshold ? "1" : "0";
+				data[current][7] = problem.aggregatedKnowledge == null ? "N/A" : problem.aggregatedKnowledge.mean > threshold ? "1" : "0";
 				data[current][8] = Utils.toString(problem.expectedKnowledge);
 				++current;
 			}
@@ -851,7 +898,7 @@ public class Main
 	}
 
 	/** @return The file to be processed for SVM. */
-	private static String[][] outputSVM()
+	private static String[][] outputSVM(boolean binary)
 	{
 		int size = 0;
 		for (Sequence sequence : allSequences)
@@ -865,7 +912,7 @@ public class Main
 		data[0][1 + metrics.size()] = "expected";
 
 		int current = 1;
-		double threshold = Double.parseDouble(settings.getProperty("knowledge_threshold"));
+		double threshold = settings.getProperty("expected_binary").equals("false") ? -1 : Double.parseDouble(settings.getProperty("expected_binary"));
 		for (Sequence sequence : allSequences)
 			for (Problem problem : sequence.problems)
 				if (problem.isRepresentative)
@@ -873,7 +920,7 @@ public class Main
 					data[current][0] = problem.name;
 					for (int i = 0; i < metrics.size(); ++i)
 						data[current][i + 1] = Utils.toString(metrics.get(i).initialDistribution.unreduce(problem.metricScores.get(metrics.get(i))));
-					data[current][1 + metrics.size()] = problem.expectedKnowledge >= threshold ? "1" : "0";
+					data[current][1 + metrics.size()] = binary ? problem.expectedKnowledge >= threshold ? "1" : "0" : Utils.toString(problem.expectedKnowledge);
 					++current;
 				}
 
