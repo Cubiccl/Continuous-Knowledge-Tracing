@@ -351,7 +351,7 @@ public class Main
 				}
 		}
 
-		return Math.sqrt(precision / allSequences.size());
+		return Math.sqrt(precision / sequences.size());
 	}
 
 	/** Uses the metrics to calculate the score of each problem.
@@ -865,7 +865,7 @@ public class Main
 	/** @return The Knowledge associated with each problem. */
 	private static String[][] outputProblems()
 	{
-		String[][] data = new String[totalProblems + 1][9];
+		String[][] data = new String[totalProblems + 1][10];
 
 		data[0][0] = "sequence";
 		data[0][1] = "problem";
@@ -876,10 +876,17 @@ public class Main
 		data[0][6] = "learned";
 		data[0][7] = "learned_aggregation";
 		data[0][8] = "expected";
+		data[0][9] = "sequence_rmse";
 
 		int current = 1;
 		double threshold = settings.getProperty("expected_binary").equals("false") ? -1 : Double.parseDouble(settings.getProperty("expected_binary"));
+		double rmse;
+		ArrayList<Sequence> s = new ArrayList<Sequence>();
 		for (Sequence sequence : allSequences)
+		{
+			s.clear();
+			s.add(sequence);
+			rmse = computePrecision(s, false);
 			for (Problem problem : sequence.problems)
 			{
 				data[current][0] = sequence.name;
@@ -891,8 +898,10 @@ public class Main
 				data[current][6] = problem.knowledge.mean > threshold ? "1" : "0";
 				data[current][7] = problem.aggregatedKnowledge == null ? "N/A" : problem.aggregatedKnowledge.mean > threshold ? "1" : "0";
 				data[current][8] = Utils.toString(problem.expectedKnowledge);
+				data[current][9] = Utils.toString(rmse);
 				++current;
 			}
+		}
 
 		return data;
 	}
